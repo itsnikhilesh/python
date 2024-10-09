@@ -1,0 +1,211 @@
+import csv
+import bcrypt
+import validators
+import re
+import requests
+import os
+
+# File to store user data
+USER_DATA_FILE = 'regno.csv'
+API_KEY = 'c4ed6f8faee9494aa6be3eb6f36ed2ce'  # Your NewsAPI key
+
+# Validate email format
+def validate_email(email):
+    return validators.email(email) and '@' in email
+
+# Validate password complexity
+def validate_password(password):
+    if len(password) < 8:
+        return False
+    if not re.search(r"\W", password):  # At least one special character
+        return False
+    return True
+
+# Register a new user
+def register():
+    email = input("Enter your email: ")
+    if not validate_email(email):
+        print("Invalid email format.")
+        return False
+
+    # Ask for the security question
+    print(f"\nChoose one security question:")
+    print("1. What is your pet's name")
+    print("2. What is your nickname")
+    print("3. What is your favorite game")
+    ch = input("Enter your choice: ")
+
+    security_question = ''
+    if ch == "1":
+        security_question = "What is your pet's name"
+    elif ch == "2":
+        security_question = "What is your nickname"
+    elif ch == "3":
+        security_question = "What is your favorite game"
+    else:
+        print("Invalid input. Defaulting to 'What is your pet's name'.")
+        security_question = "What is your pet's name"
+
+    security_answer = input(f"Answer to '{security_question}': ")
+
+    # Ask for the password
+    password = input("Enter your password (min 8 characters, 1 special character): ")
+    if not validate_password(password):
+        print("Password does not meet security requirements.")
+        return False
+
+    # Hash the password
+    hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+
+    # Check if the CSV file exists and if it's empty
+    file_exists = os.path.isfile(USER_DATA_FILE)
+
+    # Write new user data to CSV file
+    with open(USER_DATA_FILE, mode='a', newline='') as file:
+        fieldnames = ['email', 'password', 'security_question', 'security_answer']
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+
+        # Write the header if the file is newly created
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow({'email': email, 'password': hashed_password.decode('utf-8'), 'security_question': security_question, 'security_answer': security_answer.lower()})
+
+    print("Registration successful!")
+    return True
+
+# Handle user login
+def login():
+    email = input("Enter your email: ")
+    if not validate_email(email):
+        print("Invalid email format.")
+        return False
+
+    password = input("Enter your password: ")
+
+    # Load user data from CSV and check credentials
+    try:
+        with open(USER_DATA_FILE, mode='r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row['email'] == email:
+                    if bcrypt.checkpw(password.encode(), row['password'].encode()):
+                        print("Login successful!")
+                        return True
+                    else:
+                        print("Incorrect password.")
+                        return False
+            print("Email not found.")
+    except FileNotFoundError:
+        print(f"Error: {USER_DATA_FILE} file not found. Please create the file.")
+    return False
+
+# Forgot Password functionality with security question prompt
+def reset_password():
+    email = input("Enter your registered email: ")
+    try:
+        with open(USER_DATA_FILE, mode='r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row['email'] == email:
+                    # Display the security question and prompt for the answer
+                    print(f"Security question: {row['security_question']}")
+                    answer = input("Answer: ")
+                    if answer.lower() == row['security_answer']:
+                        new_password = input("Enter new password (min 8 characters, 1 special character): ")
+                        if validate_password(new_password):
+                            hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt())
+                            update_password_in_csv(email, hashed)
+                        else:
+                            print("Password does not meet security requirements.")
+                        return
+                    else:
+                        print("Security answer is incorrect.")
+                        return
+        print("Email not found.")
+    except FileNotFoundError:
+        print(f"Error: {USER_DATA_FILE} file not found. Please create the file.")
+
+# Update password in CSV file after reset
+def update_password_in_csv(email, new_hashed_password):
+    users = []
+    with open(USER_DATA_FILE, mode='r') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            if row['email'] == email:
+                row['password'] = new_hashed_password.decode('utf-8')
+            users.append(row)
+    with open(USER_DATA_FILE, mode='w', newline='') as file:
+        fieldnames = ['email', 'password', 'security_question', 'security_answer']
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(users)
+    print("Password updated successfully!")
+
+# Fetch news from NewsAPI
+def fetch_news(keyword):
+    url = f'https://newsapi.org/v2/everything?q={keyword}&apiKey={API_KEY}'
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad responses
+        news = response.json()
+        if news.get('status') != 'ok':
+            print("Error fetching news. API responded with:", news.get('message'))
+            return
+        articles = news.get('articles', [])
+        if articles:
+            print(f"Top 5 news articles for '{keyword}':")
+            for i, article in enumerate(articles[:5]):
+                print(f"{i + 1}. {article['title']} - {article['source']['name']}")
+        else:
+            print("No news found for this keyword.")
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+    except requests.exceptions.RequestException as req_err:
+        print(f"Network error occurred: {req_err}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Login with limited attempts
+def login_with_attempts():
+    attempts = 0
+    while attempts < 5:
+        if login():
+            return True
+        attempts += 1
+        print(f"Failed attempts: {attempts}")
+    if attempts >= 5:
+        print("Too many failed attempts. Try again later.")
+    return False
+
+# Main application
+def main():
+    print("Welcome to the News Headlines Console App!")
+    while True:
+        print("\nMenu:")
+        print("1. Register")
+        print("2. Login")
+        print("3. Forgot Password")
+        print("4. Exit")
+        choice = input("Select an option (1/2/3/4): ")
+
+        if choice == '1':
+            register()
+        elif choice == '2':
+            if login_with_attempts():
+                keyword = input("Enter a news keyword or topic: ")
+                fetch_news(keyword)
+            else:
+                print("Exiting due to too many failed login attempts.")
+                break
+        elif choice == '3':
+            reset_password()
+        elif choice == '4':
+            print("Goodbye!")
+            break
+        else:
+            print("Invalid option. Please try again.")
+
+if __name__ == "__main__":
+    main()
+
